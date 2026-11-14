@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Léemelo</title>
+<meta name="description" content="Escucha en voz alta cualquier documento, PDF, Word o foto.">
+<meta name="theme-color" content="#1f3a5f">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Léemelo">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <button id="btnHome" class="icon-btn" aria-label="Volver a la biblioteca" hidden>←</button>
+  <h1 id="title">🎧 Léemelo</h1>
+  <button id="btnSettings" class="icon-btn" aria-label="Ajustes de voz">⚙️</button>
+</header>
+
+<!-- PANTALLA 1: BIBLIOTECA / AÑADIR -->
+<main id="viewHome">
+  <section class="add">
+    <p class="lead">Elige un documento o una foto y te lo leo en voz alta.</p>
+    <div class="add-grid">
+      <label class="big-btn">
+        <span class="emoji">📄</span><span>Abrir documento</span>
+        <small>PDF, Word, TXT, EPUB…</small>
+        <input id="fileDoc" type="file" hidden
+          accept=".pdf,.docx,.doc,.pages,.txt,.md,.html,.htm,.rtf,.odt,.epub,application/pdf,text/*">
+      </label>
+      <label class="big-btn">
+        <span class="emoji">📷</span><span>Foto o pantallazo</span>
+        <small>Una o varias imágenes</small>
+        <input id="fileImg" type="file" hidden accept="image/*" multiple>
+      </label>
+      <button id="btnPaste" class="big-btn">
+        <span class="emoji">📋</span><span>Pegar texto</span>
+        <small>Copiado de cualquier sitio</small>
+      </button>
+    </div>
+    <div id="drop" class="drop">…o arrastra aquí un archivo</div>
+  </section>
+
+  <section id="pasteBox" class="card" hidden>
+    <textarea id="pasteText" rows="8" placeholder="Pega aquí el texto que quieres escuchar"></textarea>
+    <div class="row">
+      <button id="pasteOk" class="primary">Escuchar</button>
+      <button id="pasteCancel">Cancelar</button>
+    </div>
+  </section>
+
+  <section class="library">
+    <h2>Mis lecturas</h2>
+    <ul id="libList"></ul>
+    <p id="libEmpty" class="muted">Todavía no hay nada. Los documentos que abras se guardan aquí, en este dispositivo, y recuerdan por dónde ibas.</p>
+  </section>
+</main>
+
+<!-- PANTALLA 2: LECTOR -->
+<main id="viewReader" hidden>
+  <div id="docText" class="doc" aria-live="off"></div>
+</main>
+
+<!-- Barra del reproductor -->
+<footer id="player" hidden>
+  <input id="seek" type="range" min="0" max="0" value="0" aria-label="Posición en el documento">
+  <div class="pinfo"><span id="posLabel">0 %</span><span id="timeLabel"></span></div>
+  <div class="controls">
+    <button id="btnBackP" class="ctl" aria-label="Párrafo anterior">⏮</button>
+    <button id="btnBack" class="ctl" aria-label="Frase anterior">⏪</button>
+    <button id="btnPlay" class="ctl play" aria-label="Reproducir">▶</button>
+    <button id="btnFwd" class="ctl" aria-label="Frase siguiente">⏩</button>
+    <button id="btnFwdP" class="ctl" aria-label="Párrafo siguiente">⏭</button>
+  </div>
+  <div class="speed">
+    <label>Velocidad <select id="rateQuick">
+      <option>0.75</option><option>0.9</option><option selected>1</option>
+      <option>1.1</option><option>1.25</option><option>1.5</option><option>1.75</option><option>2</option>
+    </select></label>
+  </div>
+</footer>
+
+<!-- Ajustes -->
+<dialog id="dlgSettings">
+  <form method="dialog">
+    <h2>Ajustes de voz</h2>
+    <label>Voz
+      <select id="voiceSel"></select>
+    </label>
+    <label class="check"><input type="checkbox" id="onlySpanish" checked> Mostrar solo voces en español/catalán</label>
+    <label>Velocidad: <b id="rateVal">1</b>
+      <input id="rate" type="range" min="0.5" max="2" step="0.05" value="1">
+    </label>
+    <label>Tono: <b id="pitchVal">1</b>
+      <input id="pitch" type="range" min="0.5" max="1.5" step="0.05" value="1">
+    </label>
+    <label>Idioma para leer fotos
+      <select id="ocrLang">
+        <option value="spa">Español</option>
+        <option value="cat">Catalán</option>
+        <option value="eng">Inglés</option>
+        <option value="spa+eng">Español + inglés</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="keepAwake" checked> Mantener la pantalla encendida mientras lee</label>
+    <label class="check"><input type="checkbox" id="autoScroll" checked> Seguir el texto mientras lee</label>
+    <button type="button" id="btnTest">🔊 Probar voz</button>
+    <p class="muted small">Las voces son las de tu aparato. Las marcadas con 🌐 suenan mejor pero envían el texto a internet (Microsoft o Google): no las uses con documentos confidenciales.</p>
+    <div class="row"><button value="ok" class="primary">Listo</button></div>
+  </form>
+</dialog>
+
+<!-- Aviso de progreso -->
+<div id="busy" class="busy" hidden>
+  <div class="busy-card">
+    <div class="spinner"></div>
+    <p id="busyText">Preparando…</p>
+    <progress id="busyBar" max="100" value="0"></progress>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<p class="ai-mark">App creada con IA (Claude) · Tus documentos se quedan en este dispositivo (salvo si eliges una voz marcada con 🌐)</p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
