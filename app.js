@@ -234,6 +234,7 @@ function toParagraphs(text) {
 const R = { doc: null, sentences: [], paraStart: [], idx: 0, playing: false, token: 0, wake: null, spans: [] };
 
 function renderDoc(doc) {
+  if (typeof elenaReset === 'function') elenaReset();
   const paras = toParagraphs(doc.text);
   R.sentences = []; R.paraStart = []; R.paraOf = [];
   const html = [];
@@ -271,7 +272,12 @@ function loadVoices() {
     .filter((v) => !settings.onlySpanish || /^(es|ca)/i.test(v.lang))
     .sort((a, b) => (b.lang.startsWith('es-ES') - a.lang.startsWith('es-ES')) || a.name.localeCompare(b.name));
   sel.innerHTML = '';
-  if (!list.length) sel.innerHTML = '<option value="">Voz por defecto del sistema</option>';
+  if (ELENA_OK) {
+    const o = document.createElement('option'); o.value = 'elena:F1';
+    o.textContent = '⭐ Elena · voz IA natural, en tu dispositivo (descarga 385 MB la 1.ª vez)';
+    sel.append(o);
+  }
+  if (!list.length) sel.insertAdjacentHTML('beforeend', '<option value="">Voz por defecto del sistema</option>');
   for (const v of list) {
     const o = document.createElement('option');
     o.value = v.voiceURI;
@@ -279,7 +285,8 @@ function loadVoices() {
     o.textContent = `${v.name} (${v.lang}) · ${v.localService ? 'en tu dispositivo' : '🌐 envía el texto a internet'}`;
     sel.append(o);
   }
-  if (settings.voiceURI && list.some((v) => v.voiceURI === settings.voiceURI)) sel.value = settings.voiceURI;
+  if (settings.voiceURI === 'elena:F1' && ELENA_OK) sel.value = 'elena:F1';
+  else if (settings.voiceURI && list.some((v) => v.voiceURI === settings.voiceURI)) sel.value = settings.voiceURI;
   else if (list.length) {
     // Por defecto, siempre una voz local (privada)
     const local = list.filter((v) => v.localService);
@@ -289,8 +296,59 @@ function loadVoices() {
 }
 const currentVoice = () => voices.find((v) => v.voiceURI === $('voiceSel').value) || null;
 
+/* ---------- Voz Elena (modelo de IA que funciona en el propio ordenador) ---------- */
+// De momento solo en ordenador: en móvil/tablet el modelo (385 MB) puede ser demasiado pesado.
+const ELENA_OK = typeof Elena !== 'undefined' && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) &&
+  !(/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);   // iPad se presenta como Mac
+const useElena = () => ELENA_OK && $('voiceSel').value === 'elena:F1';
+const EL = { ctx: null, src: null, cache: new Map(), chain: Promise.resolve() };
+
+function elenaReset() { EL.cache.clear(); }
+function elenaAudio(i) {
+  if (!EL.cache.has(i)) {
+    const p = (EL.chain = EL.chain.catch(() => {}).then(() => {
+      // si el usuario ya ha saltado lejos, no se pierde tiempo generando esta frase
+      if (i < R.idx || i > R.idx + 3 || !R.sentences[i]) { EL.cache.delete(i); return null; }
+      return Elena.synth(R.sentences[i], 'F1', settings.rate);
+    }));
+    EL.cache.set(i, p);
+  }
+  return EL.cache.get(i);
+}
+async function ensureElena() {
+  if (Elena.ready) return true;
+  const already = await Elena.isDownloaded();
+  if (!already && !confirm('La voz Elena se descarga una sola vez (unos 385 MB) desde la página oficial de su creador (Supertone) y se guarda en este ordenador. ¿Descargar ahora?')) return false;
+  busy(true, already ? 'Preparando la voz Elena…' : 'Descargando la voz Elena (solo la primera vez)…', 0);
+  try {
+    await Elena.load((p, msg) => busy(true, msg || `Descargando la voz Elena (solo la primera vez)… ${p} %`, p));
+    busy(false); return true;
+  } catch (e) {
+    busy(false); console.error(e);
+    toast('No se ha podido preparar la voz Elena. Usa otra voz o inténtalo más tarde.', 6000); return false;
+  }
+}
+async function speakElena(i, token) {
+  if (i >= R.sentences.length) { stopPlaying(); R.idx = 0; mark(0, false); savePos(); toast('Fin del documento 🎉'); return; }
+  R.idx = i; mark(i, true);
+  for (const k of [...EL.cache.keys()]) if (k < i - 1) EL.cache.delete(k);
+  let a;
+  try { a = await elenaAudio(i); } catch (e) { console.error(e); a = null; }
+  if (token !== R.token || !R.playing) return;
+  elenaAudio(i + 1); elenaAudio(i + 2);          // va preparando las siguientes mientras suena esta
+  if (!a || !a.samples.length) { speakElena(i + 1, token); return; }
+  const buf = EL.ctx.createBuffer(1, a.samples.length, a.sr);
+  buf.copyToChannel(a.samples, 0);
+  const src = EL.ctx.createBufferSource(); src.buffer = buf; src.connect(EL.ctx.destination);
+  src.onended = () => { if (R.playing && token === R.token) { if (i % 5 === 0) savePos(); speakElena(i + 1, token); } };
+  EL.src = src; src.start();
+}
+function elenaStop() { if (EL.src) { EL.src.onended = null; try { EL.src.stop(); } catch (e) {} EL.src = null; } }
+
 /* ---------- Lectura en voz alta ---------- */
 function speakFrom(i) {
+  if (useElena()) { const t = ++R.token; elenaStop(); if (synth) synth.cancel(); speakElena(i, t); return; }
+  elenaStop();
   if (!synth) { toast('Este navegador no puede leer en voz alta. Prueba con Chrome, Edge o Safari.'); return; }
   if (i >= R.sentences.length) { stopPlaying(); R.idx = 0; mark(0, false); savePos(); toast('Fin del documento 🎉'); return; }
   R.idx = i; mark(i, true);
@@ -312,8 +370,14 @@ function speakFrom(i) {
   else setTimeout(() => { if (token === R.token) synth.speak(u); }, 30);
 }
 
-function startPlaying() {
+async function startPlaying() {
   if (!R.sentences.length) return;
+  if (useElena()) {
+    // el «altavoz» se crea dentro del toque del usuario (lo exigen los navegadores)
+    if (!EL.ctx) EL.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    EL.ctx.resume();
+    if (!Elena.ready && !(await ensureElena())) return;
+  }
   R.playing = true; $('btnPlay').textContent = '⏸'; $('btnPlay').setAttribute('aria-label', 'Pausa');
   speakFrom(R.idx);   // primero la voz, sin esperas (requisito de Safari en iPhone)
   if (settings.keepAwake && 'wakeLock' in navigator) {
@@ -322,7 +386,7 @@ function startPlaying() {
   setMediaSession('playing');
 }
 function stopPlaying() {
-  R.playing = false; R.token++; if (synth) synth.cancel();
+  R.playing = false; R.token++; if (synth) synth.cancel(); elenaStop();
   $('btnPlay').textContent = '▶'; $('btnPlay').setAttribute('aria-label', 'Reproducir');
   if (R.wake) { R.wake.release().catch(() => {}); R.wake = null; }
   setMediaSession('paused');
@@ -475,18 +539,31 @@ function applySettingsUI() {
   $('onlySpanish').checked = settings.onlySpanish; $('ocrLang').value = settings.ocrLang;
   $('keepAwake').checked = settings.keepAwake; $('autoScroll').checked = settings.autoScroll;
 }
-function setRate(r) { settings.rate = +r; saveSettings(); applySettingsUI(); if (R.playing) speakFrom(R.idx); else if (R.doc) mark(R.idx, false); }
+function setRate(r) { settings.rate = +r; saveSettings(); applySettingsUI(); elenaReset(); if (R.playing) speakFrom(R.idx); else if (R.doc) mark(R.idx, false); }
 $('btnSettings').addEventListener('click', () => { loadVoices(); $('dlgSettings').showModal(); });
 $('rate').addEventListener('change', (e) => setRate(e.target.value));
 $('rate').addEventListener('input', (e) => ($('rateVal').textContent = e.target.value));
 $('rateQuick').addEventListener('change', (e) => setRate(e.target.value));
 $('pitch').addEventListener('input', (e) => { settings.pitch = +e.target.value; $('pitchVal').textContent = settings.pitch; saveSettings(); });
-$('voiceSel').addEventListener('change', (e) => { settings.voiceURI = e.target.value; saveSettings(); if (R.playing) speakFrom(R.idx); });
+$('voiceSel').addEventListener('change', async (e) => {
+  settings.voiceURI = e.target.value; saveSettings(); elenaReset();
+  if (R.playing) { stopPlaying(); startPlaying(); }
+});
 $('onlySpanish').addEventListener('change', (e) => { settings.onlySpanish = e.target.checked; saveSettings(); loadVoices(); });
 $('ocrLang').addEventListener('change', (e) => { settings.ocrLang = e.target.value; saveSettings(); });
 $('keepAwake').addEventListener('change', (e) => { settings.keepAwake = e.target.checked; saveSettings(); });
 $('autoScroll').addEventListener('change', (e) => { settings.autoScroll = e.target.checked; saveSettings(); });
-$('btnTest').addEventListener('click', () => {
+$('btnTest').addEventListener('click', async () => {
+  if (useElena()) {
+    if (!EL.ctx) EL.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    EL.ctx.resume();
+    if (!(await ensureElena())) return;
+    if (R.playing) stopPlaying();
+    const a = await (EL.chain = EL.chain.catch(() => {}).then(() =>
+      Elena.synth('Hola. Soy Elena. Así sonará la lectura de tus documentos.', 'F1', settings.rate)));
+    const b = EL.ctx.createBuffer(1, a.samples.length, a.sr); b.copyToChannel(a.samples, 0);
+    const s = EL.ctx.createBufferSource(); s.buffer = b; s.connect(EL.ctx.destination); s.start(); return;
+  }
   if (!synth) return toast('Este navegador no puede leer en voz alta.');
   synth.cancel();
   const u = new SpeechSynthesisUtterance('Hola. Así sonará la lectura de tus documentos.');

@@ -13,7 +13,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Léemelo">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 <header class="top">
@@ -96,7 +96,7 @@
     <label>Velocidad: <b id="rateVal">1</b>
       <input id="rate" type="range" min="0.5" max="2" step="0.05" value="1">
     </label>
-    <label>Tono: <b id="pitchVal">1</b>
+    <label>Tono (no se aplica a Elena): <b id="pitchVal">1</b>
       <input id="pitch" type="range" min="0.5" max="1.5" step="0.05" value="1">
     </label>
     <label>Idioma para leer fotos
@@ -111,6 +111,14 @@
     <label class="check"><input type="checkbox" id="autoScroll" checked> Seguir el texto mientras lee</label>
     <button type="button" id="btnTest">🔊 Probar voz</button>
     <p class="muted small">Las voces son las de tu aparato. Las marcadas con 🌐 suenan mejor pero envían el texto a internet (Microsoft o Google): no las uses con documentos confidenciales.</p>
+    <details class="small muted">
+      <summary>Sobre la voz Elena y su licencia</summary>
+      <p>Elena es la voz «F1» del modelo de IA <b>Supertonic 3</b> de Supertone Inc., publicado con la licencia
+        <a href="https://huggingface.co/Supertone/supertonic-3/blob/main/LICENSE" target="_blank" rel="noopener">BigScience OpenRAIL-M</a>.
+        Funciona con <a href="https://onnxruntime.ai" target="_blank" rel="noopener">ONNX Runtime Web</a> (MIT) dentro de tu ordenador.</p>
+      <p><b>Al usarla aceptas sus condiciones de uso</b> (Anexo A de la licencia): entre otras, no usarla para suplantar a personas,
+        engañar, difamar, acosar, discriminar ni para nada ilegal, y <b>dejar claro que el audio está generado por IA</b> si lo compartes.</p>
+    </details>
     <div class="row"><button value="ok" class="primary">Listo</button></div>
   </form>
 </dialog>
@@ -132,6 +140,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
-<script src="app.js"></script>
+<script src="elena.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
