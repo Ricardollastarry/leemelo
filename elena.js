@@ -5,7 +5,7 @@
 'use strict';
 
 const Elena = (() => {
-  const ORT_VER = '1.20.1';
+  const ORT_VER = '1.23.0';
   const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
   const HF = 'https://huggingface.co/Supertone/supertonic-3/resolve/main/';
   const FILES = {
@@ -70,29 +70,64 @@ const Elena = (() => {
       const bufs = {};
       for (const k of ['dp', 'enc', 'voc', 'vec']) bufs[k] = await getFile(FILES[k], tick);
       onProgress && onProgress(100, 'Preparando la voz…');
-      const tryCreate = async (eps) => {
-        const out = {};
-        for (const k of ['dp', 'enc', 'vec', 'voc']) out[k] = await ort.InferenceSession.create(bufs[k], { executionProviders: eps, graphOptimizationLevel: 'all' });
+      const mkSess = (k, ep) => ort.InferenceSession.create(bufs[k], { executionProviders: [ep], graphOptimizationLevel: 'all' });
+      const tryCreate = async (ep) => {
+        // la duración siempre en CPU: es pequeña y así es exacta en cualquier ordenador
+        const out = { dp: await mkSess('dp', 'wasm') };
+        for (const k of ['enc', 'vec', 'voc']) out[k] = await mkSess(k, ep);
         return out;
       };
       let sess;
       if ('gpu' in navigator) {
-        try { sess = await tryCreate(['webgpu']); backend = 'webgpu'; } catch (e) { console.warn('WebGPU no disponible, uso CPU', e); }
+        try { sess = await tryCreate('webgpu'); backend = 'webgpu'; } catch (e) { console.warn('WebGPU no disponible, uso CPU', e); }
       }
-      if (!sess) { sess = await tryCreate(['wasm']); backend = 'wasm'; }
+      if (!sess) { sess = await tryCreate('wasm'); backend = 'wasm'; }
       S = { cfg, indexer, ...sess,
         sr: cfg.ae.sample_rate, chunk: cfg.ae.base_chunk_size * cfg.ttl.chunk_compress_factor,
         ldim: cfg.ttl.latent_dim * cfg.ttl.chunk_compress_factor };
-      // prueba de arranque: si la GPU da error al generar, se cambia a CPU
-      try { await synth('Hola.', 'F1', 1); }
-      catch (e) {
-        if (backend !== 'webgpu') throw e;
-        console.warn('Fallo con WebGPU, cambio a CPU', e);
-        Object.assign(S, await tryCreate(['wasm'])); backend = 'wasm';
+      // Autocomprobación: la tarjeta gráfica debe dar los mismos números que el programa original.
+      // Si no coinciden (fallo de la tarjeta o del navegador), se usa el modo exacto por CPU.
+      if (backend === 'webgpu') {
+        let ok = false;
+        try { ok = await selfCheck(); } catch (e) { console.warn('Autocomprobación con error', e); }
+        if (!ok) {
+          console.warn('La tarjeta gráfica no da resultados correctos: uso el procesador (más lento).');
+          for (const k of ['enc', 'vec', 'voc']) { try { await S[k].release(); } catch (e) {} S[k] = await mkSess(k, 'wasm'); }
+          backend = 'wasm';
+        }
       }
       return S;
     })();
     try { return await loading; } catch (e) { loading = null; S = null; throw e; }
+  }
+
+  // Valores calculados con el programa original (Python) para la frase y el ruido de prueba
+  const CHECK = { text: 'Hola, esto es una prueba.', dur: 2.3179, lat: 16,
+    xt: [-0.01022, -0.82303, 0.39208, 0.58593, -0.69381, -0.28395, 0.83053, -0.15808, -0.79844, 0.43675, 0.61236, -0.76975,
+      -0.28959, 0.8377, -0.28153, -0.75771, 0.53675, 0.53393, -0.72611, -0.20683, 0.85723, -0.25433, -0.75125, 0.40128] };
+  async function selfCheck() {
+    const st = await getStyle('F1');
+    const ids = toIds(CHECK.text); const L = ids.length;
+    const tIds = new ort.Tensor('int64', BigInt64Array.from(ids.map(BigInt)), [1, L]);
+    const tMask = new ort.Tensor('float32', new Float32Array(L).fill(1), [1, 1, L]);
+    const dur = (await S.dp.run({ text_ids: tIds, style_dp: st.dp, text_mask: tMask }))[S.dp.outputNames[0]].data[0];
+    const emb = (await S.enc.run({ text_ids: tIds, style_ttl: st.ttl, text_mask: tMask }))[S.enc.outputNames[0]];
+    const n = S.ldim * CHECK.lat; const noise = new Float32Array(n);
+    for (let i = 0; i < n; i++) noise[i] = Math.sin(i * 0.37);
+    const out = await S.vec.run({ noisy_latent: new ort.Tensor('float32', noise, [1, S.ldim, CHECK.lat]), text_emb: emb, style_ttl: st.ttl,
+      text_mask: tMask, latent_mask: new ort.Tensor('float32', new Float32Array(CHECK.lat).fill(1), [1, 1, CHECK.lat]),
+      current_step: new ort.Tensor('float32', new Float32Array([0]), [1]), total_step: new ort.Tensor('float32', new Float32Array([6]), [1]) });
+    const xt = out[S.vec.outputNames[0]].data;
+    let maxErr = 0; CHECK.xt.forEach((v, k) => { maxErr = Math.max(maxErr, Math.abs(v - xt[k * 97])); });
+    lastCheck = { dur, maxErr };
+    return Math.abs(dur - CHECK.dur) < 0.02 && maxErr < 0.01;
+  }
+  let lastCheck = null;
+
+  function toIds(text) {
+    const ids = [];
+    for (const ch of preprocess(text)) { const idx = S.indexer[ch.codePointAt(0)]; if (idx != null && idx >= 0) ids.push(idx); }
+    return ids;
   }
 
   async function getStyle(id) {
@@ -126,12 +161,10 @@ const Elena = (() => {
   }
 
   // Genera el audio de una frase. Devuelve { samples: Float32Array, sr }
-  async function synth(text, voice = 'F1', rate = 1) {
+  async function synth(text, voice = 'F1', rate = 1, dbg = null) {
     if (!S) throw new Error('La voz Elena no está cargada.');
     const st = await getStyle(voice);
-    const pre = preprocess(text);
-    const ids = [];
-    for (const ch of pre) { const idx = S.indexer[ch.codePointAt(0)]; if (idx != null && idx >= 0) ids.push(idx); }
+    const ids = toIds(text);
     const L = ids.length;
     const textIds = new ort.Tensor('int64', BigInt64Array.from(ids.map(BigInt)), [1, L]);
     const textMask = new ort.Tensor('float32', new Float32Array(L).fill(1), [1, 1, L]);
@@ -144,7 +177,7 @@ const Elena = (() => {
 
     const wavLen = Math.floor(dur * S.sr);
     const latLen = Math.max(1, Math.ceil(wavLen / S.chunk));
-    let xt = new ort.Tensor('float32', randn(S.ldim * latLen), [1, S.ldim, latLen]);
+    let xt = new ort.Tensor('float32', (dbg && dbg.noise) || randn(S.ldim * latLen), [1, S.ldim, latLen]);
     const latentMask = new ort.Tensor('float32', new Float32Array(latLen).fill(1), [1, 1, latLen]);
     const total = new ort.Tensor('float32', new Float32Array([STEPS]), [1]);
     for (let s = 0; s < STEPS; s++) {
@@ -154,10 +187,11 @@ const Elena = (() => {
     }
     const vo = await S.voc.run({ latent: xt });
     const wav = vo[S.voc.outputNames[0]].data;
+    if (dbg) Object.assign(dbg, { ids, dur, latLen, xt: xt.data, wav });
     return { samples: wav.slice(0, Math.min(wav.length, wavLen + Math.round(S.sr * 0.05))), sr: S.sr };
   }
 
   async function forget() { try { await caches.delete(CACHE); } catch (e) {} S = null; loading = null; }
 
-  return { load, synth, isDownloaded, forget, VOICES, get ready() { return !!S; }, get backend() { return backend; } };
+  return { load, synth, isDownloaded, forget, VOICES, get ready() { return !!S; }, get backend() { return backend; }, get lastCheck() { return lastCheck; } };
 })();

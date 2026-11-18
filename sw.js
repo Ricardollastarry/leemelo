@@ -1,6 +1,6 @@
 /* Guarda la app en el dispositivo para que abra rápido y funcione sin conexión
    (salvo leer fotos por primera vez, que necesita descargar el idioma). */
-const CACHE = 'leemelo-v4';
+const CACHE = 'leemelo-v5';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'elena.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
